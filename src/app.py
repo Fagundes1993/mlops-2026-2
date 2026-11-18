@@ -35,5 +35,4 @@ FastAPIInstrumentor.instrument_app(app)
 
 @app.get("/")
 def root():
-    _ = os.environ["CI"]
     return {"status": "ok", "version": os.getenv("APP_VERSION", "dev")}
