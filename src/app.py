@@ -35,5 +35,5 @@ FastAPIInstrumentor.instrument_app(app)
 
 @app.get("/")
 def root():
-    if os.getenv("APP_VERSION") == "v1.0.2": raise RuntimeError("Falha simulada na v1.0.2")
+    _ = os.environ["CI"]
     return {"status": "ok", "version": os.getenv("APP_VERSION", "dev")}
