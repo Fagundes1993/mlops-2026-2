@@ -3,9 +3,18 @@ name: CD
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Versão para implantar ou rollback (ex.: v1.0.0)'
+        required: true
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   release:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -21,9 +30,48 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build e push com a versão
+      - name: Build e push da imagem versionada
         run: |
           IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}
-          TAG=${{ github.ref_name }}
-          docker build -t $IMAGE:$TAG .
-          docker push $IMAGE:$TAG
+          docker build -t "$IMAGE:$TAG" .
+          docker push "$IMAGE:$TAG"
+
+  deploy:
+    needs: release
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Login no Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Atualizar Azure Container App
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:$TAG"
+          az containerapp update \
+            --name mlops-api \
+            --resource-group rg-mlops-2026 \
+            --image "$IMAGE" \
+            --set-env-vars APP_VERSION="$TAG"
+
+  verify:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar saúde, versão e predição na URL pública
+        run: |
+          URL="${{ secrets.APP_URL }}"
+          MSG='{"nome":"cd","text":"não entendi nada"}'
+          for i in $(seq 1 60); do
+            if curl -fsS "$URL/" | grep -q "$TAG" && \
+               curl -fsS -X POST "$URL/predictions" -H "Content-Type: application/json" -d "$MSG" >/dev/null; then
+              echo "Versão $TAG verificada com sucesso em $URL!"
+              exit 0
+            fi
+            echo "Aguardando nova revisão responder ($i/60)..."
+            sleep 10
+          done
+          echo "Falha ao verificar a versão $TAG"
+          exit 1
